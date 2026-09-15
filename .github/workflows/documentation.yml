@@ -9,24 +9,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Shell syntax
+        run: bash -n bin/usbclone scripts/ensure-dummy-hcd install.sh uninstall.sh
       - name: Reject private/runtime image formats
         shell: bash
         run: |
           set -euo pipefail
           bad="$(find . -type f \( -iname '*.img' -o -iname '*.raw' -o -iname '*.iso' -o -iname '*.vhd' -o -iname '*.vhdx' -o -iname '*.qcow2' \) -print)"
           test -z "$bad" || { echo "$bad"; exit 1; }
-      - name: Reject common workstation-private paths in executable/config material
+      - name: Reject workstation-private values in runtime material
         shell: bash
         run: |
           set -euo pipefail
-          targets=()
-          for d in src scripts systemd examples; do
-            test -e "$d" && targets+=("$d")
-          done
-          if ((${#targets[@]})) && grep -RInE '/home/aag-linux|/mnt/data/USB Clone' "${targets[@]}"; then
-            echo 'Private/workstation-specific path found in publishable runtime material.'
-            exit 1
-          fi
+          targets=(bin scripts install.sh uninstall.sh systemd examples)
+          grep -RInE '/home/aag-linux|/mnt/data/USB Clone|kingston-empty' "${targets[@]}" 2>/dev/null && exit 1 || true
+      - name: Reject likely real USB serial fixture labels
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -RInE 'SERIAL=(?!EXAMPLE|SYNTHETIC)' examples 2>/dev/null
       - name: Required documentation
         shell: bash
         run: |
