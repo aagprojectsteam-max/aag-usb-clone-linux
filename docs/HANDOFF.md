@@ -1,144 +1,322 @@
-# AAG USB Clone — Engineering Handoff
+# AAG USB Clone / Dummy USB — Complete Engineering Handoff
 
-## 1. Purpose
+> Durable end-to-end engineering record. This document is intentionally long. It is meant to let a future maintainer understand why the project exists, what was tried, what failed, what was accepted, how the production machine was configured, what evidence exists, what remains unverified, and how to continue without relying on chat history.
 
-This document is the durable handoff for the AAG USB Clone / Dummy USB workstream. It records why the project exists, how the accepted Linux architecture works, what failed or changed during development, how kernel and suspend integration evolved, what was actually validated, and what must never be inferred from the evidence.
+## 1. Executive summary
 
-The public repository is reconstructed from a sanitized publication capture made on 2026-09-15. The capture contained 35 files and explicitly excluded disk images. It combined the canonical source used by the live `dummy_hcd` self-heal installation, toolkit scripts, historical build source, installed scripts, systemd integration, profile evidence and three retained handoff/guide documents.
+AAG USB Clone grew from a practical requirement: software running in Windows/WinBoat needed to observe a USB mass-storage device as a USB device, not merely see files mounted from an image. A normal loop mount reproduces storage contents but not USB bus identity. The Linux solution therefore creates a USB gadget through ConfigFS, attaches a mass-storage backing file, binds it to a virtual USB device controller supplied by `dummy_hcd`, and lets Linux enumerate the resulting gadget through a virtual host-controller path.
 
-## 2. Problem statement
+The accepted reusable Linux architecture is:
 
-The original requirement was broader than simply creating a loopback block device. Software in a Windows/WinBoat workflow needed to observe a USB mass-storage device with a stable USB identity. A normal image mount does not reproduce the USB bus/device identity. The Linux solution therefore had to create a USB gadget and attach it to a virtual USB host controller.
+`profile -> ConfigFS USB gadget -> mass_storage function -> dummy UDC -> dummy_hcd host controller -> enumerated Linux USB device`
 
-The reusable solution became:
+The project subsequently acquired profile capture/import/export, multi-controller support, kernel-update recovery, Secure Boot considerations, systemd lifecycle, optional profile activation, suspend safety and WinBoat/QEMU integration work.
 
-`profile -> ConfigFS gadget -> mass_storage function -> dummy UDC -> dummy_hcd host controller -> Linux USB device`
+This public repository was reconstructed from a publication-review capture made on 2026-09-15. The capture contained 35 files and deliberately excluded disk images. It included the canonical source used by the live `dummy_hcd` self-heal installation, toolkit material, historical build source, current installed scripts, systemd integration, profile evidence and three retained handoff/guide documents. The capture was evidence for reconstruction; it was **not** published verbatim because it contained machine/device-specific material.
 
-The same workstream later gained lifecycle handling, kernel-update recovery and integration guards for suspend.
+Initial public state remains **SANITIZED SOURCE-RECONCILIATION PREVIEW** until a clean public installer/toolset is independently installed and accepted.
 
-## 3. Principal environment
+## 2. What problem were we actually solving?
 
-The principal engineering workstation is one physical HP EliteBook 840 14-inch G11 configured for dual boot. Ubuntu 26.04 LTS and Windows 11 Pro run on the same physical machine. Evidence in this handoff must therefore be read by execution environment:
+The requirement was not simply “make a virtual disk.” The target workflow needed USB semantics. In particular, a mounted image, loop device, ordinary file share or Windows-visible directory is not equivalent to a USB mass-storage device. Software may care about enumeration, USB descriptors, VID/PID, serial identity, removable-device behavior or guest passthrough.
 
-- **Ubuntu host:** Linux ConfigFS/dummy_hcd implementation and the accepted live services.
-- **Windows physical boot:** separate Windows-native investigations and proof-of-concept work.
-- **Windows guest / WinBoat:** guest visibility/passthrough workflows.
-- **CI/simulation:** useful for source and policy validation, but not a substitute for physical USB acceptance.
+The engineering problem therefore had several layers:
 
-## 4. Accepted Linux architecture
+1. preserve or define a USB device identity;
+2. provide storage contents through a backing file;
+3. expose both through a USB gadget;
+4. provide a virtual UDC/host path on a machine with no physical gadget controller suitable for this use;
+5. keep the arrangement recoverable across kernel updates;
+6. integrate safely with boot, shutdown and suspend;
+7. optionally pass the resulting device into a Windows/WinBoat guest;
+8. avoid turning private captured device material into public source.
 
-### 4.1 Profiles
+## 3. Principal development and validation environment
 
-The `usbclone` tool stores profiles beneath a configurable USB Clone home. A profile can preserve identity metadata and, in full-copy workflows, a backing disk image. Disk images and real captured identifiers are deliberately excluded from this public repository.
+The principal workstation is one physical **HP EliteBook 840 14-inch G11** configured for **dual boot**. Ubuntu 26.04 LTS and Windows 11 Pro run on the same physical computer. This distinction matters throughout the evidence.
 
-### 4.2 ConfigFS gadget
+### Ubuntu host
 
-For an active profile the tool creates a gadget beneath `/sys/kernel/config/usb_gadget`, writes the USB identity/configuration, creates a `mass_storage` function, attaches the backing file and binds the gadget to a free UDC.
+The accepted Linux ConfigFS/`dummy_hcd` implementation, current services, kernel self-heal and suspend integration were developed and validated here. The publication-era inventory observed Ubuntu kernel `7.0.0-31-generic` with `dummy_hcd` loaded and multiple dummy UDCs available.
 
-### 4.3 dummy_hcd
+### Windows physical boot
 
-`dummy_hcd` supplies virtual USB device controllers and a virtual host-controller path. The accepted workstation uses multiple UDCs so more than one gadget can exist. The installed configuration used eight controllers during the retained acceptance period.
+Separate Windows-native USB/IP/virtual-device experiments existed. They are historically related but are **not the same implementation** as the Linux ConfigFS stack.
 
-### 4.4 Kernel-update self-heal
+### Windows guest / WinBoat
 
-A key production problem was that an externally built `dummy_hcd.ko` is kernel-specific. Copying an old module to a new kernel is not a valid update strategy: vermagic/signature compatibility matters.
+The project was also used with Windows running through WinBoat/QEMU. USB passthrough into that guest is an integration layer above USB Clone; it is not part of the fundamental gadget implementation.
 
-The accepted self-heal design verifies a module for the target kernel, builds it against that kernel's headers when necessary, verifies vermagic, installs it under `/lib/modules/<kernel>/updates/usbclone/`, runs `depmod`, and loads it only when the target kernel is the currently running kernel. A boot-time oneshot service invokes this ensure path before optional profile activation.
+### CI
 
-The earlier toolkit installer used a safer provenance model for a clean installation: install the matching Ubuntu Linux source package, extract `drivers/usb/gadget/udc/dummy_hcd.c` from that source tarball, compile it against the running headers, and handle Secure Boot/MOK when needed. The public project should preserve that model rather than presenting a copied kernel source file as AAG code.
+GitHub Actions can validate publication hygiene, documentation, shell/source structure and synthetic fixtures. GitHub-hosted CI must not be represented as physical ConfigFS/UDC/USB acceptance.
 
-## 5. Provenance boundary
+## 4. Terminology
 
-`dummy_hcd.c` is Linux kernel source and carries its upstream licensing/copyright. It is not AAG-authored. Historical publication-review copies are evidence of the live installation, not a basis for claiming ownership.
+- **USB Clone** — AAG orchestration/tooling for representing a profile as a virtual USB gadget.
+- **Dummy USB** — informal project/workstream name used during development.
+- **profile** — metadata describing a USB identity/configuration and, for full-copy workflows, a storage backing image.
+- **ConfigFS** — Linux interface used to construct USB gadgets.
+- **UDC** — USB Device Controller. The virtual UDCs here are supplied by `dummy_hcd`.
+- **dummy_hcd** — upstream Linux kernel dummy host/device-controller driver used as the virtual USB transport.
+- **backing image** — file exposed through the gadget mass-storage function. Real images are runtime/private data and are not part of this repository.
 
-AAG-authored material includes the orchestration/tooling around profiles, ConfigFS, module lifecycle, service integration and acceptance/recovery logic. Any future release that vendors upstream kernel source must preserve its exact license and provenance; the preferred public design is to extract matching source from the user's installed distribution source package.
+## 5. Architecture from the bottom up
 
-## 6. Generic vs workstation-specific integration
+### 5.1 Backing storage
 
-The generic project is USB Clone itself. Several captured production files were intentionally not copied verbatim into the public source tree because they contain workstation-specific assumptions.
+A full USB clone may use a disk image as the storage backend. Such images can be very large and may contain copyrighted, proprietary or personal data. They are runtime artifacts, not source code. The local inventory contained large image files; publication capture intentionally excluded them.
 
-Examples from the accepted machine included a profile activator with a fixed local user/home, a fixed `/mnt/data/...` profile root, a real VID:PID and a profile named for a physical Kingston device. Those values are evidence, not reusable defaults.
+### 5.2 Profiles
 
-Similarly, the ordinary-suspend gate is coupled to the AAG T700 modem pre/post path. Its generic safety principle belongs in this documentation: do not allow ordinary suspend to proceed while an active virtual USB gadget could make teardown unsafe, and preserve fail-closed transaction identity. The exact T700 command chain belongs to the workstation integration, not the generic package.
+The toolkit supports profile-oriented operation. A profile can carry identity/configuration information and point to a backing image. Development evidence included profiles derived from real devices. Those raw profiles were useful for acceptance but are not suitable public examples because they can expose real serial numbers, descriptors and workstation paths.
 
-## 7. Suspend integration
+Public examples must therefore be synthetic. Users who capture their own device information are responsible for their own data and legal/licensing constraints.
 
-The accepted integration discovered that a virtual USB gadget can be an active consumer during suspend preparation. The production gate inventories bound ConfigFS gadgets and USB devices rooted under `dummy_hcd`.
+### 5.3 ConfigFS gadget construction
 
-The gate's policy is conservative:
+For an active profile, the orchestration layer creates a gadget under `/sys/kernel/config/usb_gadget`, writes USB identity/configuration values, creates a `mass_storage` function, associates the backing file, links the function into a configuration and binds the gadget to a free UDC.
+
+This is the point at which profile metadata and backing storage become a USB gadget.
+
+### 5.4 Virtual USB transport: dummy_hcd
+
+Most ordinary PCs are not USB gadget devices. `dummy_hcd` provides a virtual environment containing dummy UDCs and host-controller behavior. USB Clone uses those UDCs to bind ConfigFS gadgets so Linux can enumerate them as USB devices.
+
+The accepted workstation configuration used multiple controllers; the retained inventory observed eight dummy UDCs. Multi-controller support matters because one bound gadget consumes a UDC and multiple gadgets may coexist.
+
+### 5.5 Enumeration
+
+After binding, the host side sees a USB device rather than merely a mounted image. That distinction is the core reason this architecture exists.
+
+## 6. The `usbclone` toolkit
+
+The retained toolkit and installed command show that the project evolved beyond a one-off script. The command surface included profile-oriented operations such as capture, import/export, start/stop and management of ConfigFS/dummy UDC resources.
+
+The publication review captured the installed command, but the complete installed script is not automatically treated as publishable merely because it exists. Before verbatim publication it must pass privacy/provenance review, because operational scripts can embed assumptions about local paths, profile names or captured identities.
+
+The public reconstruction should preserve behavior while making configuration explicit and portable.
+
+## 7. Kernel-source provenance — critical rule
+
+`dummy_hcd.c` is **not AAG-authored code**. It is Linux kernel source with upstream copyright/licensing. A copied source file from the production machine is evidence of what was built, not something AAG can present as original source.
+
+The earlier toolkit installer used the better clean-install provenance model:
+
+1. obtain the matching Ubuntu/Linux source package;
+2. extract `drivers/usb/gadget/udc/dummy_hcd.c` from that source;
+3. build against the target/running kernel headers;
+4. preserve upstream licensing and copyright;
+5. handle Secure Boot signing when required.
+
+That is the preferred public installation strategy. If any future release vendors upstream kernel source, its exact provenance/license must be retained and clearly separated from AAG-authored orchestration.
+
+## 8. Why kernel updates became a production problem
+
+An externally compiled `.ko` is kernel-specific. A module that worked on one kernel cannot safely be copied into a newer kernel merely because the filename is the same. Kernel ABI/build configuration and `vermagic` matter; Secure Boot may add signing requirements.
+
+This led to the kernel self-heal design.
+
+## 9. Accepted kernel self-heal design
+
+The production design treats the target kernel as an explicit build target:
+
+1. determine the target kernel;
+2. verify the target kernel headers exist;
+3. inspect whether a suitable external `dummy_hcd` module already exists;
+4. verify module metadata/vermagic;
+5. if missing/incompatible, compile from the approved matching source;
+6. place the module under `/lib/modules/<kernel>/updates/usbclone/`;
+7. run `depmod`;
+8. load the module only when the target is the currently running kernel;
+9. keep boot-time module ensure separate from optional device/profile activation.
+
+This avoids the dangerous shortcut of copying a stale module between kernels.
+
+A systemd oneshot service invokes the ensure path during boot. The retained production capture included both the ensure script and the service definition.
+
+## 10. Secure Boot / MOK considerations
+
+The historical toolkit included Secure Boot/MOK handling because an externally built module may be rejected when Secure Boot enforcement is active. Signing material is machine/security-sensitive and must not be committed to a public repository.
+
+A public installer may support signing, but it must generate/use local signing material and explain enrollment rather than shipping private keys or workstation certificates.
+
+## 11. Boot lifecycle
+
+The production arrangement separated two concerns:
+
+- ensure that the kernel has a compatible `dummy_hcd` implementation;
+- optionally activate a chosen USB Clone profile.
+
+That separation is important. A generic installation should not assume that every boot must expose one specific captured device. Workstation-specific activation can depend on local profile names, local storage paths and a particular application workflow.
+
+The public project should therefore install generic capability first and make automatic profile activation opt-in.
+
+## 12. Workstation-specific activation discovered during publication review
+
+The captured production activation service/script included assumptions specific to the accepted workstation, including a fixed user/home, a fixed `/mnt/data/...` USB Clone storage location, a profile associated with a physical Kingston device and a real USB identity.
+
+Those details are **evidence of the deployment**, not public defaults. They were intentionally not copied verbatim into the sanitized source tree.
+
+Public configuration must use placeholders/synthetic identities and configurable paths.
+
+## 13. Suspend integration
+
+USB Clone eventually interacted with the wider AAG suspend-safety architecture. A bound virtual gadget is a real active consumer from the perspective of lifecycle management; suspending or tearing down related storage while a gadget remains active can be unsafe.
+
+The production ordinary-suspend gate therefore inventories ConfigFS/dummy_hcd state.
+
+Accepted conservative policy:
 
 - empty dummy controllers are allowed;
-- an active USB Clone gadget is refused;
-- an unmanaged bound ConfigFS gadget is refused;
-- an orphan dummy_hcd USB device without a ConfigFS owner is refused.
+- a bound managed USB Clone gadget causes refusal when the surrounding workflow requires it to be inactive;
+- an unmanaged bound ConfigFS gadget causes refusal;
+- an orphan USB device rooted under `dummy_hcd` without an identifiable ConfigFS owner causes refusal.
 
-The retained self-test also verifies transaction handling so a refused pre phase does not falsely run the paired modem post phase. This is integration evidence, not a requirement for users who do not use the AAG suspend/T700 stack.
+The retained integration also protected transaction pairing so a failed/refused pre phase could not incorrectly trigger the paired modem post phase.
 
-## 8. Historical Windows / WinBoat work
+### Important boundary
 
-The engineering history contains Windows-native USB/IP/virtual-device investigations as well as WinBoat/QEMU guest passthrough. They must not be merged conceptually with the Linux ConfigFS implementation.
+The captured gate was integrated with the AAG T700 modem/suspend system. That exact dependency is **not** a generic USB Clone requirement. The reusable concept is lifecycle awareness and fail-closed safety; the T700 command chain belongs to the workstation integration.
 
-The latest retained system handoff treats the validated QMP passthrough baseline as stronger evidence than a later Compose/QEMU permanent-injection experiment that remained transitional and required re-verification. Future documentation must preserve that distinction.
+## 14. Relationship to the external-storage safe-suspend project
 
-No proprietary Windows application, third-party binary, captured private device image or licensed data belongs in this repository.
+USB Clone and the external-storage safe-suspend project are separate projects with an integration boundary. USB Clone may consume backing storage; the suspend project protects storage/power-state transitions. Documentation should cross-reference the integration but should not duplicate or merge the two codebases.
 
-## 9. Privacy sanitization performed for publication
+## 15. WinBoat / Windows guest integration
 
-The 2026-09-15 review archive was **not** published verbatim. The public source intentionally excludes:
+A major practical use case involved making the virtual USB device available to a Windows guest running through WinBoat/QEMU.
 
-- raw disk images;
-- real USB serial numbers;
-- binary descriptor captures from real devices;
-- raw `udev`, `lsusb -v`, `lsblk` and partition dumps tied to real devices;
-- fixed local usernames and home paths;
-- `/mnt/data/...` workstation paths;
-- device-specific activation scripts with real identity values;
-- private or proprietary application/data artifacts.
+Historical work included QMP/QEMU passthrough and later experiments with more permanent Compose/QEMU injection. The newest retained system-level handoff gives stronger acceptance status to the QMP passthrough baseline; the later permanent-injection experiment was transitional and required re-verification.
 
-Public examples must use synthetic identities.
+Therefore the durable rule is:
 
-## 10. Validation evidence
+**Do not rewrite history to make the later experiment the accepted baseline unless new evidence validates it.**
 
-The publication capture itself passed the following capture gates:
+WinBoat/Otzar integration is optional and layered above the generic Linux USB Clone implementation.
 
-- canonical `dummy_hcd` source used by the live self-heal path present;
-- 6 toolkit files captured;
-- 3 historical-build files captured;
-- 4 installed implementation files captured;
-- 3 systemd integration files captured;
-- 3 documentation files captured;
-- no disk image included;
-- live system not modified by capture;
-- archive integrity verified.
+## 16. Windows-native workstream
 
-The broader inventory immediately before publication review also showed the virtual USB stack active on Ubuntu kernel `7.0.0-31-generic`, with `dummy_hcd` loaded, multiple dummy UDCs available and the accepted virtual mass-storage profile visible on the USB bus.
+There was also a separate Windows-native USB/IP/virtual-device proof-of-concept/workstream. It must remain conceptually distinct from Linux USB Clone.
 
-These facts do **not** prove that a newly cloned public repository has been installed clean-room on arbitrary hardware. A release must not claim that until a public installer is reconstructed and tested independently.
+Reasons:
 
-## 11. Known gaps at initial publication
+- different operating-system architecture;
+- different driver/tool provenance;
+- potentially different licensing/upstream source;
+- different acceptance evidence;
+- Windows physical boot is not WinBoat guest execution.
 
-1. The public installer must be reconciled from the retained toolkit and current self-heal logic.
-2. The complete 687-line installed `usbclone` command must be privacy/provenance reviewed before being published verbatim.
-3. Public synthetic fixtures must replace real profile captures.
-4. CI can test shell syntax, policy and fixture parsing but cannot prove real ConfigFS/UDC behavior on GitHub-hosted runners.
-5. Windows-native proof-of-concept source requires separate provenance review before publication.
-6. WinBoat/Otzar integration should be documented as optional integration and must not publish third-party code/data.
+The Windows-native source should only be published after an independent provenance audit. It must not be silently folded into this repository as though it were AAG-authored Linux code.
 
-## 12. Recovery and rollback principles
+## 17. Dual-boot evidence rule
 
-- Do not delete user profile storage during uninstall by default.
-- Do not copy a `dummy_hcd.ko` built for another kernel.
-- Preserve the previous module as a timestamped backup before replacing a production external module.
-- Verify target-kernel headers and module vermagic before installation.
-- Keep optional workstation-specific activation separate from the generic boot-time module ensure service.
-- When an active gadget is part of a larger suspend workflow, fail closed rather than pretending teardown succeeded.
+Because Ubuntu and Windows run on the **same physical computer**, statements such as “tested on Linux and Windows” can be misleading unless the execution environment is specified.
 
-## 13. Repository maintenance rule
+Every future validation should use one of these labels:
 
-Every material change must update this handoff when it changes architecture, validation, installation, privacy boundaries, kernel behavior, Windows/WinBoat integration or known limitations. Historical failures must remain documented when they explain why the accepted architecture exists.
+- `UBUNTU_PHYSICAL_HOST`
+- `WINDOWS_PHYSICAL_BOOT`
+- `WINDOWS_WINBOAT_GUEST`
+- `CI_SIMULATION`
 
-## 14. Publication state
+Dual boot is useful for cross-OS development, but it is not evidence of two independent hardware platforms.
 
-Initial public classification: **SANITIZED SOURCE-RECONCILIATION PREVIEW**.
+## 18. Historical evolution and major engineering lessons
 
-The repository is suitable for preserving the engineering story and sanitized reusable components. It must not be called a clean-room production release until the reconstructed public installer/tooling is tested independently from the private workstation installation.
+### Stage A — need for USB identity
+
+The project began when ordinary storage/image presentation was insufficient. The requirement was elevated from “make data visible” to “make a USB device visible.”
+
+### Stage B — ConfigFS + dummy_hcd architecture
+
+ConfigFS supplied gadget composition and `dummy_hcd` supplied virtual UDC/host behavior. This became the reusable Linux architecture.
+
+### Stage C — profiles/toolkit
+
+The solution grew into profile-based tooling rather than one hard-coded gadget. Capture/import/export/start/stop concepts made the work reusable.
+
+### Stage D — production identity/profile activation
+
+A real device-derived profile was used in the accepted workstation workflow. This was useful for proving the practical requirement but later became an important publication/privacy boundary.
+
+### Stage E — kernel-update failure mode
+
+Kernel-specific external module behavior demonstrated that copying an old `.ko` forward is not a valid maintenance strategy.
+
+### Stage F — self-healing module lifecycle
+
+The project gained target-kernel build/verification, `vermagic` checking, installation under `updates/usbclone`, `depmod` and boot-time ensure behavior.
+
+### Stage G — suspend safety
+
+The virtual gadget became part of broader lifecycle reasoning. Active/unmanaged/orphan gadget states had to be detected rather than ignored during suspend preparation.
+
+### Stage H — Windows/WinBoat integration
+
+Guest passthrough work demonstrated the end-to-end use case. A validated QMP path existed; later permanent-injection experiments were not automatically promoted to canonical status.
+
+### Stage I — publication reconstruction
+
+On 2026-09-15 the broader AAG GitHub audit discovered that Dummy USB/USB Clone was a substantial project missing from the public portfolio. A read-only source capture was made specifically to reconstruct a safe public repository.
+
+## 19. Publication capture — exact evidence boundary
+
+The successful V2 capture reported:
+
+- `CAPTURE=PASS`
+- `VERSION=V2`
+- 35 files total;
+- archive size approximately 144 KiB;
+- canonical `dummy_hcd` source present;
+- 6 toolkit files;
+- 3 historical-build files;
+- 4 installed implementation files;
+- 3 systemd files;
+- 3 documentation files;
+- no disk images;
+- live system not modified.
+
+The capture was intentionally small because huge runtime disk images were excluded.
+
+## 20. Why the first capture was rejected
+
+The first publication-capture script printed `CAPTURE=PASS` even though three `cp --parents` operations failed. The failures occurred inside `find -exec`; the shell's `set -e` behavior did not turn that into the intended top-level failure.
+
+This is an important engineering lesson: **a success banner is not evidence unless required artifacts are explicitly checked.**
+
+The V2 capture corrected this by:
+
+- copying through controlled helper functions;
+- checking the canonical source explicitly;
+- counting toolkit/historical/installed/systemd/documentation files;
+- refusing to create an archive when required categories were absent;
+- explicitly scanning for forbidden image formats;
+- validating the final tar archive.
+
+The flawed first archive was not used as the publication source.
+
+## 21. Privacy review findings
+
+The V2 capture was suitable for private review but still not safe to publish verbatim. Review found real-device and workstation-specific information, including combinations of:
+
+- USB serial numbers;
+- real VID/PID identity;
+- descriptor data;
+- `udev` evidence;
+- `lsusb -v` evidence;
+- partition/`lsblk` evidence;
+- local usernames/home assumptions;
+- `/mnt/data/...` paths;
+- real profile names;
+- application-specific activation assumptions.
+
+Therefore the repository uses sanitized/synthetic examples rather than publishing raw capture material.
+
+## 22. What must never be committed
+
+Do not commit:
+
+- real disk/backing images (`*.img`, `*.raw`, `*.iso`, `*.vhd*`, `*.qcow2`);
+- real captured device serials unless intentionally public and reviewed;
+- raw descriptor/udev/partition dumps from private devices;
