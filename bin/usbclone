@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+PROGRAM="usbclone"
+VERSION="2.0-public-preview"
+REAL_USER="${SUDO_USER:-${USER:-root}}"
+REAL_HOME="$(getent passwd "$REAL_USER" 2>/dev/null | awk -F: '{print $6}' || true)"
+REAL_HOME="${REAL_HOME:-$HOME}"
+CLONE_HOME="${USB_CLONE_HOME:-$REAL_HOME/USB-CLONES}"
+PROFILES="$CLONE_HOME/profiles"
+CONFIGFS=/sys/kernel/config
+GADGET_ROOT="$CONFIGFS/usb_gadget"
+say(){ printf '%s\n' "$*"; }; err(){ printf 'Error: %s\n' "$*" >&2; }; die(){ err "$*"; exit 1; }
+need_root(){ if [ "${EUID:-$(id -u)}" -ne 0 ]; then exec sudo env USB_CLONE_HOME="$CLONE_HOME" "$0" "$@"; fi; }
+init_dirs(){ mkdir -p "$PROFILES"; chmod 700 "$CLONE_HOME" "$PROFILES" 2>/dev/null || true; if [ "${EUID:-$(id -u)}" -eq 0 ] && [ "$REAL_USER" != root ]; then chown "$REAL_USER":"$REAL_USER" "$CLONE_HOME" "$PROFILES" 2>/dev/null || true; fi; }
+valid_name(){ [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]]; }
+profile_dir(){ printf '%s/%s' "$PROFILES" "$1"; }; gadget_name(){ printf 'usbclone_%s' "$1"; }; gadget_dir(){ printf '%s/%s' "$GADGET_ROOT" "$(gadget_name "$1")"; }
+read_one(){ [ -r "$1" ] && command cat "$1" 2>/dev/null | tr -d '\r\n' || true; }
+mount_configfs(){ modprobe libcomposite; modprobe usb_f_mass_storage 2>/dev/null || true; mountpoint -q "$CONFIGFS" || mount -t configfs none "$CONFIGFS"; mkdir -p "$GADGET_ROOT"; }
+load_dummy(){ modinfo dummy_hcd >/dev/null 2>&1 || die 'dummy_hcd is not installed; run the installer first.'; modprobe dummy_hcd; }
+available_udc(){ local requested="${1:-}" udc g used; if [ -n "$requested" ]; then [ -e "/sys/class/udc/$requested" ] || die "UDC not found: $requested"; printf '%s' "$requested"; return; fi; while IFS= read -r udc; do used=0; for g in "$GADGET_ROOT"/*; do [ -d "$g" ] || continue; [ "$(read_one "$g/UDC")" = "$udc" ] && used=1; done; [ "$used" -eq 0 ] && { printf '%s' "$udc"; return; }; done < <(find /sys/class/udc -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null | sort -V); return 1; }
+cmd_scan(){ lsblk -S -o NAME,TRAN,VENDOR,MODEL,REV,SERIAL,SIZE; echo; lsusb; }
+cmd_stop(){ need_root stop "$@"; local name="${1:-}" g; [ -n "$name" ] || die 'usage: usbclone stop NAME'; g="$(gadget_dir "$name")"; [ -d "$g" ] || return 0; printf '\n' > "$g/UDC" 2>/dev/null || true; find "$g/configs" -type l -delete 2>/dev/null || true; find "$g/functions" -mindepth 1 -maxdepth 1 -type d -exec rmdir {} + 2>/dev/null || true; find "$g/strings" "$g/configs" -depth -type d -exec rmdir {} + 2>/dev/null || true; rmdir "$g" 2>/dev/null || true; }
+cmd_stop_all(){ need_root stop-all; local g n; mount_configfs; for g in "$GADGET_ROOT"/usbclone_*; do [ -d "$g" ] || continue; n="${g##*/usbclone_}"; cmd_stop "$n"; done; }
+cmd_status(){ local g; printf '%-30s %-20s\n' PROFILE UDC; for g in "$GADGET_ROOT"/usbclone_*; do [ -d "$g" ] || continue; printf '%-30s %-20s\n' "${g##*/usbclone_}" "$(read_one "$g/UDC")"; done; }
+cmd_doctor(){ local fail=0; for c in lsusb lsblk modinfo modprobe findmnt; do command -v "$c" >/dev/null || { echo "MISSING: $c"; fail=1; }; done; modinfo dummy_hcd >/dev/null 2>&1 || { echo 'MISSING: dummy_hcd'; fail=1; }; [ -d /sys/class/udc ] || { echo 'MISSING: /sys/class/udc'; fail=1; }; echo "USB_CLONE_HOME=$CLONE_HOME"; echo "VERSION=$VERSION"; [ "$fail" -eq 0 ]; }
+usage(){ cat <<'EOF'
+AAG USB Clone public preview
+
+Commands currently exposed in the sanitized preview:
+  scan                 Show block/USB devices
+  status               Show AAG USB Clone gadgets
+  stop NAME            Stop one AAG gadget
+  stop-all             Stop all AAG gadgets
+  doctor               Check prerequisites
+
+Capture/start/import/export remain withheld until their profile parser and identity handling complete publication review. See docs/HANDOFF.md.
+EOF
+}
+main(){ local cmd="${1:-help}"; shift || true; case "$cmd" in scan) cmd_scan "$@";; status) cmd_status "$@";; stop) cmd_stop "$@";; stop-all) cmd_stop_all "$@";; doctor) cmd_doctor "$@";; -h|--help|help) usage;; --version) echo "$VERSION";; *) die "unknown command: $cmd";; esac; }
+main "$@"
