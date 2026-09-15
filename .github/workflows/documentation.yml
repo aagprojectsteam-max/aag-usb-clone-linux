@@ -22,12 +22,17 @@ jobs:
         run: |
           set -euo pipefail
           targets=(bin scripts install.sh uninstall.sh systemd examples)
-          grep -RInE '/home/aag-linux|/mnt/data/USB Clone|kingston-empty' "${targets[@]}" 2>/dev/null && exit 1 || true
-      - name: Reject likely real USB serial fixture labels
+          if grep -RInE '/home/aag-linux|/mnt/data/USB Clone|kingston-empty' "${targets[@]}" 2>/dev/null; then
+            echo 'Private/workstation-specific value found in runtime material.'
+            exit 1
+          fi
+      - name: Synthetic example identity policy
         shell: bash
         run: |
           set -euo pipefail
-          ! grep -RInE 'SERIAL=(?!EXAMPLE|SYNTHETIC)' examples 2>/dev/null
+          hits="$(grep -RIn 'SERIAL=' examples 2>/dev/null || true)"
+          bad="$(printf '%s\n' "$hits" | grep -vE 'SERIAL=(EXAMPLE|SYNTHETIC)' || true)"
+          test -z "$bad" || { echo "$bad"; exit 1; }
       - name: Required documentation
         shell: bash
         run: |
