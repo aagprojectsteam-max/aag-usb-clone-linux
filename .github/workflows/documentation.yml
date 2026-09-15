@@ -10,7 +10,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Shell syntax
-        run: bash -n bin/usbclone scripts/ensure-dummy-hcd install.sh uninstall.sh
+        run: bash -n bin/usbclone scripts/ensure-dummy-hcd install.sh uninstall.sh tests/test-public-tool.sh
+      - name: Synthetic tool lifecycle
+        run: bash tests/test-public-tool.sh
       - name: Reject private/runtime image formats
         shell: bash
         run: |
@@ -21,7 +23,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          targets=(bin scripts install.sh uninstall.sh systemd examples)
+          targets=(bin scripts install.sh uninstall.sh systemd examples tests)
           if grep -RInE '/home/aag-linux|/mnt/data/USB Clone|kingston-empty' "${targets[@]}" 2>/dev/null; then
             echo 'Private/workstation-specific value found in runtime material.'
             exit 1
@@ -30,8 +32,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          hits="$(grep -RIn 'SERIAL=' examples 2>/dev/null || true)"
-          bad="$(printf '%s\n' "$hits" | grep -vE 'SERIAL=(EXAMPLE|SYNTHETIC)' || true)"
+          hits="$(grep -RInE 'USB_SERIAL=|SCSI_SERIAL=' examples 2>/dev/null || true)"
+          bad="$(printf '%s\n' "$hits" | grep -vE '(USB_SERIAL|SCSI_SERIAL)=(EXAMPLE|SYNTHETIC)' || true)"
           test -z "$bad" || { echo "$bad"; exit 1; }
       - name: Required documentation
         shell: bash
