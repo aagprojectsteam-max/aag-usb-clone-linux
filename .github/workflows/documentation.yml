@@ -1,0 +1,37 @@
+name: documentation-and-publication-hygiene
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject private/runtime image formats
+        shell: bash
+        run: |
+          set -euo pipefail
+          bad="$(find . -type f \( -iname '*.img' -o -iname '*.raw' -o -iname '*.iso' -o -iname '*.vhd' -o -iname '*.vhdx' -o -iname '*.qcow2' \) -print)"
+          test -z "$bad" || { echo "$bad"; exit 1; }
+      - name: Reject common workstation-private paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -RInE '/home/aag-linux|/mnt/data/USB Clone|kingston-empty' . --exclude-dir=.git; then
+            echo 'Private/workstation-specific identifier found.'
+            exit 1
+          fi
+      - name: Required documentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s README.md
+          test -s docs/HANDOFF.md
+          test -s docs/ARCHITECTURE.md
+          test -s docs/INSTALLATION.md
+          test -s docs/TESTING.md
+          test -s docs/TROUBLESHOOTING.md
+          test -s SECURITY.md
+          test -s CHANGELOG.md
