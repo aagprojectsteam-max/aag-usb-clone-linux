@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+export LC_ALL=C
+K="${1:-$(uname -r)}"
+COUNT="${USBCLONE_DUMMY_COUNT:-8}"
+BUILD="/var/cache/aag-usbclone/dummy-hcd-$K"
+DEST_DIR="/lib/modules/$K/updates/usbclone"
+DEST="$DEST_DIR/dummy_hcd.ko"
+[[ "${EUID:-$(id -u)}" -eq 0 ]] || exec sudo env USBCLONE_DUMMY_COUNT="$COUNT" "$0" "$@"
+log(){ echo "AAG-USBClone: $*"; }
+[[ "$COUNT" =~ ^[1-9][0-9]*$ ]] || { log 'invalid USBCLONE_DUMMY_COUNT'; exit 2; }
+[[ -d "/lib/modules/$K/build" ]] || { log "headers missing for $K"; exit 21; }
+installed_ok(){ [[ -f "$DEST" ]] && [[ "$(modinfo -F vermagic "$DEST" 2>/dev/null | awk '{print $1}')" == "$K" ]]; }
+if ! installed_ok; then
+  BASE="$(printf '%s' "$K" | sed -E 's/-[0-9]+-[^-]+$//')"
+  PKG="linux-source-$BASE"
+  if apt-cache show "$PKG" >/dev/null 2>&1; then DEBIAN_FRONTEND=noninteractive apt-get install -y "$PKG"; else DEBIAN_FRONTEND=noninteractive apt-get install -y linux-source; fi
+  TARBALL="$(find /usr/src -maxdepth 2 -type f \( -name "linux-source-$BASE.tar.*" -o -name 'linux-source-*.tar.*' \) -print 2>/dev/null | sort -V | tail -n1)"
+  [[ -f "$TARBALL" ]] || { log 'Linux source tarball not found'; exit 20; }
+  MEMBER="$(tar -tf "$TARBALL" | grep '/drivers/usb/gadget/udc/dummy_hcd.c$' | head -n1 || true)"
+  [[ -n "$MEMBER" ]] || { log 'dummy_hcd.c not found in distribution source'; exit 20; }
+  rm -rf "$BUILD"; mkdir -p "$BUILD"; tar -xOf "$TARBALL" "$MEMBER" > "$BUILD/dummy_hcd.c"
+  cat > "$BUILD/Makefile" <<'MAKE'
+obj-m := dummy_hcd.o
+MAKE
+  make -C "/lib/modules/$K/build" M="$BUILD" modules
+  [[ "$(modinfo -F vermagic "$BUILD/dummy_hcd.ko" | awk '{print $1}')" == "$K" ]] || { log 'vermagic mismatch'; exit 23; }
+  if mokutil --sb-state 2>/dev/null | grep -qi enabled; then
+    log 'Secure Boot is enabled. Refusing unsigned automatic installation.'
+    log 'Follow docs/INSTALLATION.md for local MOK signing/enrollment.'
+    exit 30
+  fi
+  mkdir -p "$DEST_DIR"; [[ ! -f "$DEST" ]] || cp -a "$DEST" "$DEST.aag-backup-$(date +%Y%m%d-%H%M%S)"
+  install -m 0644 "$BUILD/dummy_hcd.ko" "$DEST"; depmod -a "$K"; installed_ok || exit 24
+fi
+cat > /etc/modprobe.d/usbclone-dummy-hcd.conf <<EOF
+options dummy_hcd num=$COUNT is_high_speed=1 is_super_speed=1
+EOF
+if [[ "$K" == "$(uname -r)" ]]; then modprobe dummy_hcd; UDC_COUNT="$(find /sys/class/udc -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)"; [[ "$UDC_COUNT" -gt 0 ]] || exit 25; log "UDC controllers available: $UDC_COUNT"; fi
+log "dummy_hcd ready for $K"
