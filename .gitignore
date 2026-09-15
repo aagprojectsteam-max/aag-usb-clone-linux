@@ -1,0 +1,29 @@
+# Private/runtime USB Clone data
+USB-CLONES/
+profiles/
+*.img
+*.raw
+*.iso
+*.vhd
+*.vhdx
+*.qcow2
+
+# Kernel build artifacts
+*.ko
+*.o
+*.mod
+*.mod.c
+*.cmd
+Module.symvers
+modules.order
+
+# Keys / certificates
+*.key
+*.pem
+*.priv
+*.der
+
+# Logs and local review captures
+*.log
+publication-review/
+.private/
